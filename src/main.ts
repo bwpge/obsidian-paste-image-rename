@@ -1,5 +1,6 @@
 import {
   App,
+  EditorPosition,
   HeadingCache,
   MarkdownView,
   Modal,
@@ -263,14 +264,16 @@ export default class PasteImageRenamePlugin extends Plugin {
 	// returns a new name for the input file, with extension
 	generateNewName(file: TFile, activeFile: TFile) {
 		let imageNameKey = ''
-		let firstHeading = ''
+		let headerName = ''
 		let frontmatter
+
 		const fileCache = this.app.metadataCache.getFileCache(activeFile)
 		if (fileCache) {
 			debugLog('frontmatter', fileCache.frontmatter)
 			frontmatter = fileCache.frontmatter
 			imageNameKey = frontmatter?.imageNameKey || ''
-			firstHeading = getFirstHeading(fileCache.headings)
+			const cursor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getCursor()
+			headerName = getClosestHeading(fileCache.headings, cursor)
 		} else {
 			console.warn('could not get file cache from active file', activeFile.name)
 		}
@@ -281,7 +284,7 @@ export default class PasteImageRenamePlugin extends Plugin {
 				imageNameKey,
 				fileName: activeFile.basename,
 				dirName: activeFile.parent.name,
-				firstHeading,
+				headerName,
 			},
 			frontmatter)
 		const meaninglessRegex = new RegExp(`[${this.settings.dupNumberDelimiter}\\s]`, 'gm')
@@ -413,15 +416,31 @@ export default class PasteImageRenamePlugin extends Plugin {
 	}
 }
 
-function getFirstHeading(headings?: HeadingCache[]) {
-	if (headings && headings.length > 0) {
-		for (const heading of headings) {
-			if (heading.level === 1) {
-				return heading.heading
-			}
+function getClosestHeading(headings?: HeadingCache[], cursor?: EditorPosition): string {
+	if (!headings || headings.length <= 0) {
+		return ''
+	}
+	if (!cursor) {
+		return ''
+	}
+
+	let h = ''
+	let dist = -1
+
+	// unfortunately we have to iterate through all headings because the cache
+	// is not guaranteed to be sorted by position
+	for (const heading of headings) {
+		const d = cursor.line - heading.position.start.line
+		if (d < 0) {
+			continue
+		}
+		if (d < dist || dist < 0) {
+			h = heading.heading
+			dist = d
 		}
 	}
-	return ''
+
+	return h
 }
 
 function isPastedImage(file: TAbstractFile): boolean {
@@ -436,19 +455,6 @@ function isPastedImage(file: TAbstractFile): boolean {
 function isMarkdownFile(file: TAbstractFile): boolean {
 	if (file instanceof TFile) {
 		if (file.extension === 'md') {
-			return true
-		}
-	}
-	return false
-}
-
-const IMAGE_EXTS = [
-	'jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg',
-]
-
-function isImage(file: TAbstractFile): boolean {
-	if (file instanceof TFile) {
-		if (IMAGE_EXTS.contains(file.extension.toLowerCase())) {
 			return true
 		}
 	}
@@ -672,20 +678,13 @@ Available variables:
 - {{fileName}}: name of the active file, without ".md" extension.
 - {{dirName}}: name of the directory which contains the document (the root directory of vault results in an empty variable).
 - {{imageNameKey}}: this variable is read from the markdown file's frontmatter, from the same key "imageNameKey".
+- {{headerName}}: nearest previous heading relative to the cursor position when pasting.
 - {{DATE:$FORMAT}}: use "$FORMAT" to format the current date, "$FORMAT" must be a Moment.js format string, e.g. {{DATE:YYYY-MM-DD}}.
 
 Here are some examples from pattern to image names (repeat in sequence), variables: fileName = "My note", imageNameKey = "foo":
 - {{fileName}}: My note, My note-1, My note-2
 - {{imageNameKey}}: foo, foo-1, foo-2
 - {{imageNameKey}}-{{DATE:YYYYMMDD}}: foo-20220408, foo-20220408-1, foo-20220408-2
-`
-
-const prefixMapDesc = `
-If the active document path starts with a given prefix, use the value as an
-additional prefix followed by the duplicate number delimiter. Each line should
-have the format "prefix=value". Prefix matching is case sensitive. Example:
-Foo/Bar/Baz=fbz will insert "fbz-" before images pasted into Foo > Bar > Baz >
-(note).
 `
 
 class SettingTab extends PluginSettingTab {
@@ -758,7 +757,7 @@ class SettingTab extends PluginSettingTab {
 				))
 
 		new Setting(containerEl)
-			.setName('Space replacement')
+			.setName('Replace spaces')
 			.setDesc(`Replace spaces in the image file name with the given value. Leave empty to disable.`)
 			.addText(toggle => toggle
 				.setValue(this.plugin.settings.spaceReplacement)
