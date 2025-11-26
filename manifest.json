@@ -1,6 +1,6 @@
 {
-	"id": "paste-image-rename-improved",
-	"name": "Paste image rename improved",
+	"id": "better-paste-image-rename",
+	"name": "Better paste image rename",
 	"version": "2.0.0",
 	"minAppVersion": "0.12.0",
 	"description": "Fork of Paste image rename by Reorx with additional features",
