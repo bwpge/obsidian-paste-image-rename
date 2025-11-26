@@ -272,8 +272,12 @@ export default class PasteImageRenamePlugin extends Plugin {
 			debugLog('frontmatter', fileCache.frontmatter)
 			frontmatter = fileCache.frontmatter
 			imageNameKey = frontmatter?.imageNameKey || ''
-			const cursor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getCursor()
-			headerName = getClosestHeading(fileCache.headings, cursor)
+
+			// only run expensive search if using it in template
+			if (this.settings.imageNamePattern.contains("{{headerName}}")) {
+				const cursor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getCursor()
+				headerName = getNearestHeading(fileCache.headings, cursor)
+			}
 		} else {
 			console.warn('could not get file cache from active file', activeFile.name)
 		}
@@ -416,7 +420,7 @@ export default class PasteImageRenamePlugin extends Plugin {
 	}
 }
 
-function getClosestHeading(headings?: HeadingCache[], cursor?: EditorPosition): string {
+function getNearestHeading(headings?: HeadingCache[], cursor?: EditorPosition): string {
 	if (!headings || headings.length <= 0) {
 		return ''
 	}
