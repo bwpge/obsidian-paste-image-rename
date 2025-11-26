@@ -44,6 +44,7 @@ interface PluginSettings {
 	dupNumberAlways: boolean
 	spaceReplacement: string
 	useLowercase: boolean
+	deleteOnCancel: boolean
 	prefixMap: string
 	autoRename: boolean
 	handleAllAttachments: boolean
@@ -59,6 +60,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
 	dupNumberAlways: false,
 	spaceReplacement: '',
 	useLowercase: false,
+	deleteOnCancel: false,
 	prefixMap: '',
 	autoRename: false,
 	handleAllAttachments: false,
@@ -211,7 +213,7 @@ export default class PasteImageRenamePlugin extends Plugin {
 
 	openRenameModal(file: TFile, newName: string, sourcePath: string) {
 		const modal = new ImageRenameModal(
-			this.app, file as TFile, newName, this.settings.selectOnOpen,
+			this.app, file as TFile, newName,this.settings.selectOnOpen, this.settings.deleteOnCancel, sourcePath,
 			(confirmedName: string) => {
 				debugLog('confirmedName:', confirmedName)
 				this.renameFile(file, confirmedName, sourcePath, true)
@@ -466,18 +468,24 @@ function isImage(file: TAbstractFile): boolean {
 
 class ImageRenameModal extends Modal {
 	src: TFile
+	sourcePath: string
 	stem: string
 	renameFunc: (path: string) => void
 	onCloseExtra: () => void
 	selectOnOpen: boolean
+	deleteOnCancel: boolean
+	acceptRename: boolean
 
-	constructor(app: App, src: TFile, stem: string, selectOnOpen: boolean, renameFunc: (path: string) => void, onClose: () => void) {
+	constructor(app: App, src: TFile, stem: string, selectOnOpen: boolean, deleteOnCancel: boolean, sourcePath: string, renameFunc: (path: string) => void, onClose: () => void) {
 		super(app);
 		this.src = src
+		this.sourcePath = sourcePath
 		this.stem = stem
 		this.renameFunc = renameFunc
 		this.onCloseExtra = onClose
 		this.selectOnOpen = selectOnOpen
+		this.deleteOnCancel = deleteOnCancel
+		this.acceptRename = false
 	}
 
 	onOpen() {
@@ -534,6 +542,7 @@ class ImageRenameModal extends Modal {
 
 		const doRename = async () => {
 			debugLog('doRename', `stem=${stem}`)
+			this.acceptRename = true
 			this.renameFunc(getNewName(stem))
 		}
 
@@ -595,6 +604,42 @@ class ImageRenameModal extends Modal {
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
+
+		// handle file delete logic
+		if (this.deleteOnCancel && !this.acceptRename) {
+			debugLog("deleting source file", this.src.path)
+			const f = this.app.vault.getAbstractFileByPath(this.src.path)
+
+			// basic sanity check to avoid nuking the user's directories if
+			// something breaks in this plugin down the line
+			if (f instanceof TFile) {
+				this.app.vault.delete(f)
+				const linkText = this.app.fileManager.generateMarkdownLink(f, this.sourcePath)
+				const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
+				if (!editor) {
+					new Notice('failed to remove text: could not get active editor')
+					return
+				}
+
+				const cursor = editor.getCursor()
+				const line = editor.getLine(cursor.line)
+				const replacedLine = line.replace(`!${linkText}`, '')
+				debugLog('current line -> replaced line', line, replacedLine)
+				editor.transaction({
+					changes: [
+						{
+							from: {...cursor, ch: 0},
+							to: {...cursor, ch: line.length},
+							text: replacedLine,
+						}
+					]
+				})
+			} else {
+				debugLog("source path is not a file", this.src.path)
+			}
+		}
+		this.acceptRename = false
+
 		this.onCloseExtra()
 	}
 }
@@ -701,6 +746,17 @@ class SettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.useLowercase)
 				.onChange(async (value) => {
 					this.plugin.settings.useLowercase = value
+					await this.plugin.saveSettings()
+				}
+				))
+
+		new Setting(containerEl)
+			.setName('Delete pasted image if cancelled')
+			.setDesc(`If enabled, the pasted image file will be deleted if the rename dialog is cancelled.`)
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.deleteOnCancel)
+				.onChange(async (value) => {
+					this.plugin.settings.deleteOnCancel = value
 					await this.plugin.saveSettings()
 				}
 				))
