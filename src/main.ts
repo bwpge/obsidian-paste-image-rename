@@ -3,7 +3,7 @@
  * - [x] imageNameKey in frontmatter
  * - [x] after renaming, cursor should be placed after the image file link
  * - [x] handle image insert from drag'n drop
- * - [ ] select text when opening the renaming modal, make this an option
+ * - [x] select text when opening the renaming modal, make this an option
  * - [ ] add button for use the current file name, imageNameKey, last input name,
  *       segments of last input name
  * - [x] batch rename all pasted images in a file
@@ -41,6 +41,8 @@ interface PluginSettings {
 	dupNumberAtStart: boolean
 	dupNumberDelimiter: string
 	dupNumberAlways: boolean
+	useLowercase: boolean
+	prefixMap: string
 	autoRename: boolean
 	handleAllAttachments: boolean
 	excludeExtensionPattern: string
@@ -52,6 +54,8 @@ const DEFAULT_SETTINGS: PluginSettings = {
 	dupNumberAtStart: false,
 	dupNumberDelimiter: '-',
 	dupNumberAlways: false,
+	useLowercase: false,
+	prefixMap: '',
 	autoRename: false,
 	handleAllAttachments: false,
 	excludeExtensionPattern: '',
@@ -276,7 +280,7 @@ export default class PasteImageRenamePlugin extends Plugin {
 			console.warn('could not get file cache from active file', activeFile.name)
 		}
 
-		const stem = renderTemplate(
+		let stem = renderTemplate(
 			this.settings.imageNamePattern,
 			{
 				imageNameKey,
@@ -287,9 +291,37 @@ export default class PasteImageRenamePlugin extends Plugin {
 			frontmatter)
 		const meaninglessRegex = new RegExp(`[${this.settings.dupNumberDelimiter}\\s]`, 'gm')
 
+		if (this.settings.prefixMap) {
+			const lines = this.settings.prefixMap.split("\n")
+			for (const line of lines) {
+				if (!line.trim()) {
+					continue
+				}
+
+				const split = line.split("=", 2)
+				if (split.length !== 2) {
+					new Notice(`Error: prefix map line '${line}' is missing '='. Please fix your plugin settings.`)
+					break
+				}
+				const k = split[0]
+				const v = split[1]
+
+				if (activeFile.path.startsWith(k)) {
+					stem = `${v}${this.settings.dupNumberDelimiter}${stem}`
+					break
+				}
+			}
+		}
+
+		let ext = file.extension
+		if (this.settings.useLowercase) {
+			stem = stem.toLowerCase()
+			ext = ext.toLowerCase()
+		}
+
 		return {
 			stem,
-			newName: stem + '.' + file.extension,
+			newName: stem + '.' + ext,
 			isMeaningful: stem.replace(meaninglessRegex, '') !== '',
 		}
 	}
@@ -508,6 +540,7 @@ class ImageRenameModal extends Modal {
 
 		const nameInputEl = nameSetting.controlEl.children[0] as HTMLInputElement
 		nameInputEl.focus()
+		nameInputEl.select()
 		const nameInputState = lockInputMethodComposition(nameInputEl)
 		nameInputEl.addEventListener('keydown', async (e) => {
 			// console.log('keydown', e.key, `lock=${nameInputState.lock}`)
@@ -622,6 +655,28 @@ class SettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.dupNumberAlways)
 				.onChange(async (value) => {
 					this.plugin.settings.dupNumberAlways = value
+					await this.plugin.saveSettings()
+				}
+				))
+
+		new Setting(containerEl)
+			.setName('Use lowercase')
+			.setDesc(`If enabled, transform the image name to all lowercase characters.`)
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.useLowercase)
+				.onChange(async (value) => {
+					this.plugin.settings.useLowercase = value
+					await this.plugin.saveSettings()
+				}
+				))
+
+		new Setting(containerEl)
+			.setName('Prefix map')
+			.setDesc('If the active document path starts with a given prefix, use the value as an additional prefix followed by the duplicate number delimiter. Each line should have the format "prefix=value". Example: my/path=mp will insert "mp-" before images pasted into notes in my/path.')
+			.addTextArea(toggle => toggle
+				.setValue(this.plugin.settings.prefixMap)
+				.onChange(async (value) => {
+					this.plugin.settings.prefixMap = value
 					await this.plugin.saveSettings()
 				}
 				))
