@@ -1,10 +1,10 @@
 {
-	"id": "obsidian-paste-image-rename",
-	"name": "Paste image rename",
-	"version": "1.6.1",
+	"id": "paste-image-rename-improved",
+	"name": "Paste image rename improved",
+	"version": "2.0.0",
 	"minAppVersion": "0.12.0",
-	"description": "Rename pasted images and all the other attchments added to the vault",
-	"author": "Reorx",
-	"authorUrl": "https://github.com/reorx",
+	"description": "Fork of Paste image rename by Reorx with additional features",
+	"author": "bwpge",
+	"authorUrl": "https://github.com/bwpge",
 	"isDesktopOnly": false
 }
