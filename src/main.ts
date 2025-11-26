@@ -38,9 +38,11 @@ import {
 interface PluginSettings {
 	// {{imageNameKey}}-{{DATE:YYYYMMDD}}
 	imageNamePattern: string
+	selectOnOpen: boolean
 	dupNumberAtStart: boolean
 	dupNumberDelimiter: string
 	dupNumberAlways: boolean
+	spaceReplacement: string
 	useLowercase: boolean
 	prefixMap: string
 	autoRename: boolean
@@ -51,9 +53,11 @@ interface PluginSettings {
 
 const DEFAULT_SETTINGS: PluginSettings = {
 	imageNamePattern: '{{fileName}}',
+	selectOnOpen: false,
 	dupNumberAtStart: false,
 	dupNumberDelimiter: '-',
 	dupNumberAlways: false,
+	spaceReplacement: '',
 	useLowercase: false,
 	prefixMap: '',
 	autoRename: false,
@@ -207,7 +211,7 @@ export default class PasteImageRenamePlugin extends Plugin {
 
 	openRenameModal(file: TFile, newName: string, sourcePath: string) {
 		const modal = new ImageRenameModal(
-			this.app, file as TFile, newName,
+			this.app, file as TFile, newName, this.settings.selectOnOpen,
 			(confirmedName: string) => {
 				debugLog('confirmedName:', confirmedName)
 				this.renameFile(file, confirmedName, sourcePath, true)
@@ -290,6 +294,10 @@ export default class PasteImageRenamePlugin extends Plugin {
 			},
 			frontmatter)
 		const meaninglessRegex = new RegExp(`[${this.settings.dupNumberDelimiter}\\s]`, 'gm')
+
+		if (this.settings.spaceReplacement) {
+			stem = stem.replace(' ', this.settings.spaceReplacement)
+		}
 
 		if (this.settings.prefixMap) {
 			const lines = this.settings.prefixMap.split("\n")
@@ -461,13 +469,15 @@ class ImageRenameModal extends Modal {
 	stem: string
 	renameFunc: (path: string) => void
 	onCloseExtra: () => void
+	selectOnOpen: boolean
 
-	constructor(app: App, src: TFile, stem: string, renameFunc: (path: string) => void, onClose: () => void) {
+	constructor(app: App, src: TFile, stem: string, selectOnOpen: boolean, renameFunc: (path: string) => void, onClose: () => void) {
 		super(app);
 		this.src = src
 		this.stem = stem
 		this.renameFunc = renameFunc
 		this.onCloseExtra = onClose
+		this.selectOnOpen = selectOnOpen
 	}
 
 	onOpen() {
@@ -540,7 +550,10 @@ class ImageRenameModal extends Modal {
 
 		const nameInputEl = nameSetting.controlEl.children[0] as HTMLInputElement
 		nameInputEl.focus()
-		nameInputEl.select()
+		if (this.selectOnOpen) {
+			nameInputEl.select()
+		}
+
 		const nameInputState = lockInputMethodComposition(nameInputEl)
 		nameInputEl.addEventListener('keydown', async (e) => {
 			// console.log('keydown', e.key, `lock=${nameInputState.lock}`)
@@ -627,6 +640,17 @@ class SettingTab extends PluginSettingTab {
 			));
 
 		new Setting(containerEl)
+			.setName('Select text when dialog opens')
+			.setDesc(`If enabled, selects all text when the rename file dialog opens.`)
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.selectOnOpen)
+				.onChange(async (value) => {
+					this.plugin.settings.selectOnOpen = value
+					await this.plugin.saveSettings()
+				}
+				))
+
+		new Setting(containerEl)
 			.setName('Duplicate number at start (or end)')
 			.setDesc(`If enabled, duplicate number will be added at the start as prefix for the image name, otherwise it will be added at the end as suffix for the image name.`)
 			.addToggle(toggle => toggle
@@ -655,6 +679,17 @@ class SettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.dupNumberAlways)
 				.onChange(async (value) => {
 					this.plugin.settings.dupNumberAlways = value
+					await this.plugin.saveSettings()
+				}
+				))
+
+		new Setting(containerEl)
+			.setName('Space replacement')
+			.setDesc(`Replace spaces in the image file name with the given value. Leave empty to disable.`)
+			.addText(toggle => toggle
+				.setValue(this.plugin.settings.spaceReplacement)
+				.onChange(async (value) => {
+					this.plugin.settings.spaceReplacement = value
 					await this.plugin.saveSettings()
 				}
 				))
