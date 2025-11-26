@@ -1,14 +1,3 @@
-/* TODOs:
- * - [x] check name existence when saving
- * - [x] imageNameKey in frontmatter
- * - [x] after renaming, cursor should be placed after the image file link
- * - [x] handle image insert from drag'n drop
- * - [x] select text when opening the renaming modal, make this an option
- * - [ ] add button for use the current file name, imageNameKey, last input name,
- *       segments of last input name
- * - [x] batch rename all pasted images in a file
- * - [ ] add rules for moving matched images to destination folder
- */
 import {
   App,
   HeadingCache,
@@ -507,6 +496,7 @@ class ImageRenameModal extends Modal {
 		const getNewName = (stem: string) => stem + '.' + ext
 		const getNewPath = (stem: string) => path.join(this.src.parent.path, getNewName(stem))
 
+		const startValue = stem
 		const infoET = createElementTree(contentEl, {
 			tag: 'ul',
 			cls: 'info',
@@ -543,19 +533,50 @@ class ImageRenameModal extends Modal {
 		const doRename = async () => {
 			debugLog('doRename', `stem=${stem}`)
 			this.acceptRename = true
+			// don't actually rename if the user wants the original name
+			if (stem === this.src.basename) {
+				return
+			}
 			this.renameFunc(getNewName(stem))
+		}
+
+		let textEl: any = null
+		let rnBtn: any = null
+
+		const updateValue = (value: string) => {
+			stem = sanitizer.filename(value)
+			infoET.children[1].children[1].el.innerText = getNewPath(stem)
+
+			if (!textEl || !rnBtn) {
+				return
+			}
+			if (!stem) {
+				textEl.inputEl.addClass("invalid-textbox");
+				rnBtn.buttonEl.disabled = true;
+			} else {
+				textEl.inputEl.removeClass("invalid-textbox");
+				rnBtn.buttonEl.disabled = false;
+			}
 		}
 
 		const nameSetting = new Setting(contentEl)
 			.setName('New name')
 			.setDesc('Please input the new name for the image (without extension)')
-			.addText(text => text
+			.addText(text => { text
 				.setValue(stem)
 				.onChange(async (value) => {
-					stem = sanitizer.filename(value)
-					infoET.children[1].children[1].el.innerText = getNewPath(stem)
-				}
-				))
+					updateValue(value)
+				})
+				textEl = text
+			})
+			.addButton(button =>
+				button.setButtonText("Use original name")
+				.onClick(async () => {
+					if (textEl) {
+						textEl.setValue(this.src.basename)
+						updateValue(this.src.basename)
+					}
+				}))
 
 		const nameInputEl = nameSetting.controlEl.children[0] as HTMLInputElement
 		nameInputEl.focus()
@@ -563,37 +584,37 @@ class ImageRenameModal extends Modal {
 			nameInputEl.select()
 		}
 
+		const accept = () => {
+			if (!stem) {
+				new Notice('Error: New image name cannot not be empty')
+				return
+			}
+			doRename()
+			this.close()
+		}
+
 		const nameInputState = lockInputMethodComposition(nameInputEl)
 		nameInputEl.addEventListener('keydown', async (e) => {
-			// console.log('keydown', e.key, `lock=${nameInputState.lock}`)
 			if (e.key === 'Enter' && !nameInputState.lock) {
 				e.preventDefault()
-				if (!stem) {
-					errorEl.innerText = 'Error: "New name" could not be empty'
-					errorEl.style.display = 'block'
-					return
-				}
-				doRename()
-				this.close()
-			}
-		})
-
-		const errorEl = contentEl.createDiv({
-			cls: 'error',
-			attr: {
-				style: 'display: none;',
+				accept()
 			}
 		})
 
 		new Setting(contentEl)
 			.addButton(button => {
+				rnBtn = button
 				button
 					.setButtonText('Rename')
-					.onClick(() => {
-						doRename()
-						this.close()
-					})
+					.setCta()
+					.onClick(accept)
 			})
+			.addButton(button =>
+				button.setButtonText("Reset")
+				.onClick(async () => {
+					updateValue(startValue)
+					textEl?.setValue(startValue)
+				}))
 			.addButton(button => {
 				button
 					.setButtonText('Cancel')
@@ -657,6 +678,14 @@ Here are some examples from pattern to image names (repeat in sequence), variabl
 - {{fileName}}: My note, My note-1, My note-2
 - {{imageNameKey}}: foo, foo-1, foo-2
 - {{imageNameKey}}-{{DATE:YYYYMMDD}}: foo-20220408, foo-20220408-1, foo-20220408-2
+`
+
+const prefixMapDesc = `
+If the active document path starts with a given prefix, use the value as an
+additional prefix followed by the duplicate number delimiter. Each line should
+have the format "prefix=value". Prefix matching is case sensitive. Example:
+Foo/Bar/Baz=fbz will insert "fbz-" before images pasted into Foo > Bar > Baz >
+(note).
 `
 
 class SettingTab extends PluginSettingTab {
@@ -763,7 +792,10 @@ class SettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Prefix map')
-			.setDesc('If the active document path starts with a given prefix, use the value as an additional prefix followed by the duplicate number delimiter. Each line should have the format "prefix=value". Example: my/path=mp will insert "mp-" before images pasted into notes in my/path.')
+			.setDesc(`If the active document path starts with a given prefix, use the value as an additional
+			prefix followed by the duplicate number delimiter. Each line should have the format "prefix=value".
+			Prefix matching is case sensitive.
+			Example: Foo/Bar/Baz=fbz will insert "fbz-" before images pasted into Foo > Bar > Baz > (note).`)
 			.addTextArea(toggle => toggle
 				.setValue(this.plugin.settings.prefixMap)
 				.onChange(async (value) => {

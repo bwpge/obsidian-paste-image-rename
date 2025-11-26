@@ -21,6 +21,9 @@
 	display: flex;
 	justify-content: center;
 }
+.invalid-textbox {
+	border-color: var(--color-red) !important;
+}
 
 .image-rename-modal .info {
 	padding: 10px 0;
