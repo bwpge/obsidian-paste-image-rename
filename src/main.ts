@@ -464,11 +464,16 @@ function getNearestHeading(headings?: HeadingCache[], cursor?: EditorPosition): 
 	return h
 }
 
+// these are the exts that can most likely be display in the rename dialog
+const IMAGE_EXTENSIONS = [
+	"jpg", "jpeg", "jfif", "pjpeg", "pjp", "png", "gif", "webp", "png", "bmp",
+	"ico", "cur", "avif", "heif", "heic"
+]
+
 function isPastedImage(file: TAbstractFile): boolean {
 	if (file instanceof TFile) {
-		if (file.name.startsWith(PASTED_IMAGE_PREFIX)) {
-			return true
-		}
+		return (file.name.startsWith(PASTED_IMAGE_PREFIX) ||
+			IMAGE_EXTENSIONS.contains(file.extension.toLowerCase()))
 	}
 	return false
 }
