@@ -26,7 +26,6 @@ import {
 } from './utils';
 
 interface PluginSettings {
-	// {{imageNameKey}}-{{DATE:YYYYMMDD}}
 	imageNamePattern: string
 	selectOnOpen: boolean
 	dupNumberAtStart: boolean
@@ -38,7 +37,9 @@ interface PluginSettings {
 	prefixMap: string
 	autoRename: boolean
 	handleAllAttachments: boolean
-	excludeExtensionPattern: string
+	ignoreActiveDocPattern: string
+	ignorePathPattern: string
+	ignoreExtensionPattern: string
 	disableRenameNotice: boolean
 }
 
@@ -54,7 +55,9 @@ const DEFAULT_SETTINGS: PluginSettings = {
 	prefixMap: '',
 	autoRename: false,
 	handleAllAttachments: false,
-	excludeExtensionPattern: '',
+	ignoreActiveDocPattern: '',
+	ignorePathPattern: '',
+	ignoreExtensionPattern: '',
 	disableRenameNotice: false,
 }
 
@@ -82,20 +85,20 @@ export default class PasteImageRenamePlugin extends Plugin {
 				if (timeGapMs > 1000)
 					return
 				// always ignore markdown file creation
-				if (isMarkdownFile(file))
+				if (isMarkdownFile(file)) {
 					return
+				}
+				// check ignore patterns for any path, not only when "handle all" is enabled
+				if (this.shouldIgnore(file)) {
+					debugLog('excluded file by pattern', file)
+					return
+				}
 				if (isPastedImage(file)) {
 					debugLog('pasted image created', file)
 					this.startRenameProcess(file, this.settings.autoRename)
-				} else {
-					if (this.settings.handleAllAttachments) {
-						debugLog('handleAllAttachments for file', file)
-						if (this.testExcludeExtension(file)) {
-							debugLog('excluded file by ext', file)
-							return
-						}
-						this.startRenameProcess(file, this.settings.autoRename)
-					}
+				} else if (this.settings.handleAllAttachments) {
+					debugLog('handleAllAttachments for file', file)
+					this.startRenameProcess(file, this.settings.autoRename)
 				}
 			})
 		)
@@ -340,11 +343,11 @@ export default class PasteImageRenamePlugin extends Plugin {
 		debugLog('sibling files', listed)
 
 		// parse newName
-		const newNameExt = path.extension(newName),
-			newNameStem = newName.slice(0, newName.length - newNameExt.length - 1),
-			newNameStemEscaped = escapeRegExp(newNameStem),
-			delimiter = this.settings.dupNumberDelimiter,
-			delimiterEscaped = escapeRegExp(delimiter)
+		const newNameExt = path.extension(newName)
+		const newNameStem = newName.slice(0, newName.length - newNameExt.length - 1)
+		const newNameStemEscaped = escapeRegExp(newNameStem)
+		const delimiter = this.settings.dupNumberDelimiter
+		const delimiterEscaped = escapeRegExp(delimiter)
 
 		let dupNameRegex
 		if (this.settings.dupNumberAtStart) {
@@ -405,10 +408,24 @@ export default class PasteImageRenamePlugin extends Plugin {
 		this.modals.map(modal => modal.close())
 	}
 
-	testExcludeExtension(file: TFile): boolean {
-		const pattern = this.settings.excludeExtensionPattern
-		if (!pattern) return false
-		return new RegExp(pattern).test(file.extension)
+	shouldIgnore(file: TFile): boolean {
+		let result = false
+		const activeFile = this.getActiveFile()?.path ?? ''
+
+		const extPat = this.settings.ignoreExtensionPattern.replace('\n', '').trim()
+		if (extPat && file.extension) {
+			result = result || new RegExp(extPat).test(file.extension)
+		}
+		const docPat = this.settings.ignoreActiveDocPattern.replace('\n', '').trim()
+		if (docPat && activeFile) {
+			result = result || new RegExp(docPat).test(activeFile)
+		}
+		const pathPat = this.settings.ignorePathPattern.replace('\n', '').trim()
+		if (pathPat && file.path) {
+			result = result || new RegExp(docPat).test(file.path)
+		}
+
+		return result
 	}
 
 	async loadSettings() {
@@ -765,6 +782,7 @@ class SettingTab extends PluginSettingTab {
 			.setDesc(`Replace spaces in the image file name with the given value. Leave empty to disable.`)
 			.addText(toggle => toggle
 				.setValue(this.plugin.settings.spaceReplacement)
+				.setPlaceholder('disabled when empty')
 				.onChange(async (value) => {
 					this.plugin.settings.spaceReplacement = value
 					await this.plugin.saveSettings()
@@ -772,7 +790,7 @@ class SettingTab extends PluginSettingTab {
 				))
 
 		new Setting(containerEl)
-			.setName('Use lowercase')
+			.setName('Use lowercase image names')
 			.setDesc(`If enabled, transform the image name to all lowercase characters.`)
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.useLowercase)
@@ -784,7 +802,7 @@ class SettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Delete pasted image if cancelled')
-			.setDesc(`If enabled, the pasted image file will be deleted if the rename dialog is cancelled.`)
+			.setDesc('If enabled, the pasted image file will be deleted if the rename dialog is cancelled.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.deleteOnCancel)
 				.onChange(async (value) => {
@@ -794,13 +812,14 @@ class SettingTab extends PluginSettingTab {
 				))
 
 		new Setting(containerEl)
-			.setName('Prefix map')
+			.setName('Prefix by path')
 			.setDesc(`If the active document path starts with a given prefix, use the value as an additional
 			prefix followed by the duplicate number delimiter. Each line should have the format "prefix=value".
 			Prefix matching is case sensitive.
-			Example: Foo/Bar/Baz=fbz will insert "fbz-" before images pasted into Foo > Bar > Baz > (note).`)
+			Example: Foo/BAR/baz=fbz will insert "fbz-" before image names pasted into Foo > BAR > baz > (note).`)
 			.addTextArea(toggle => toggle
 				.setValue(this.plugin.settings.prefixMap)
+				.setPlaceholder('Foo/BAR/baz=fbz')
 				.onChange(async (value) => {
 					this.plugin.settings.prefixMap = value
 					await this.plugin.saveSettings()
@@ -827,23 +846,48 @@ class SettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.handleAllAttachments)
 				.onChange(async (value) => {
 					this.plugin.settings.handleAllAttachments = value;
-					await this.plugin.saveSettings();
+					await this.plugin.saveSettings()
 				}
-			));
+			))
 
 		new Setting(containerEl)
-			.setName('Exclude extension pattern')
-			.setDesc(`This option is only useful when "Handle all attachments" is enabled.
-			Write a Regex pattern to exclude certain extensions from being handled. Only the first line will be used.`)
+			.setName('Ignore by active document')
+			.setDesc('Regular expression to ignore processing attachments by the active document path. The full path is tested against this pattern, including the file extension.')
+			.setClass('single-line-textarea')
+			.addTextArea(text => text
+				.setPlaceholder('^foo/(bar|baz)')
+				.setValue(this.plugin.settings.ignoreActiveDocPattern)
+				.onChange(async (value) => {
+					this.plugin.settings.ignoreActiveDocPattern = value;
+					await this.plugin.saveSettings()
+				}
+			))
+
+		new Setting(containerEl)
+			.setName('Ignore by path')
+			.setDesc('Regular expression to ignore processing attachments by path. The full path is tested against this pattern, including the file extension. This setting is useful to avoid processing files in directories handled by other plugins.')
+			.setClass('single-line-textarea')
+			.addTextArea(text => text
+				.setPlaceholder('my/protected/folder')
+				.setValue(this.plugin.settings.ignorePathPattern)
+				.onChange(async (value) => {
+					this.plugin.settings.ignorePathPattern = value;
+					await this.plugin.saveSettings()
+				}
+			))
+
+		new Setting(containerEl)
+			.setName('Ignore by extension')
+			.setDesc('Regular expression to ignore processing attachments by extension.')
 			.setClass('single-line-textarea')
 			.addTextArea(text => text
 				.setPlaceholder('docx?|xlsx?|pptx?|zip|rar')
-				.setValue(this.plugin.settings.excludeExtensionPattern)
+				.setValue(this.plugin.settings.ignoreExtensionPattern)
 				.onChange(async (value) => {
-					this.plugin.settings.excludeExtensionPattern = value;
-					await this.plugin.saveSettings();
+					this.plugin.settings.ignoreExtensionPattern = value;
+					await this.plugin.saveSettings()
 				}
-			));
+			))
 
 		new Setting(containerEl)
 			.setName('Disable rename notice')
@@ -853,8 +897,8 @@ class SettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.disableRenameNotice)
 				.onChange(async (value) => {
 					this.plugin.settings.disableRenameNotice = value;
-					await this.plugin.saveSettings();
+					await this.plugin.saveSettings()
 				}
-			));
+			))
 	}
 }
