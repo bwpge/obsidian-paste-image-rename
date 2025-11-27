@@ -3,6 +3,20 @@
 > [!IMPORTANT]
 > Please be aware this is a fork of [reorx/obsidian-paste-image-rename](https://github.com/reorx/obsidian-paste-image-rename) and will not maintain compatibility with all features in the original plugin. This fork aims to implement features that have been requested for years, such as lowercase image names or deleting on cancel.
 
+## Features and improvements
+
+- Option to use lowercase names
+- Option to open rename dialog with image name text already selected
+- Option to delete images when dialog is cancelled
+- Space replacement
+- `{{headerName}}` template variable (closest previous header)
+- 'Use original name' button in rename dialog
+- 'Reset' button in rename dialog to restore original suggested name
+- Ignore rename by source file or active document paths using regex patterns
+- Match common image extensions for pasted image files (png, jpg, webp, etc.)
+
+---
+
 > :loudspeaker: Starting from 1.4.0, Paste image rename becomes a general-purpose renaming plugin
 > that can handle all attachments added to the vault.
 
