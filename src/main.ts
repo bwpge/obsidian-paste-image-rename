@@ -32,7 +32,7 @@ interface PluginSettings {
 	dupNumberDelimiter: string
 	dupNumberAlways: boolean
 	spaceReplacement: string
-	useLowercase: boolean
+	transformName: string
 	deleteOnCancel: boolean
 	prefixMap: string
 	autoRename: boolean
@@ -50,7 +50,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
 	dupNumberDelimiter: '-',
 	dupNumberAlways: false,
 	spaceReplacement: '',
-	useLowercase: false,
+	transformName: '',
 	deleteOnCancel: false,
 	prefixMap: '',
 	autoRename: false,
@@ -322,15 +322,17 @@ export default class PasteImageRenamePlugin extends Plugin {
 			}
 		}
 
-		let ext = file.extension
-		if (this.settings.useLowercase) {
-			stem = stem.toLowerCase()
-			ext = ext.toLowerCase()
+		if (this.settings.transformName) {
+			if (this.settings.transformName === 'lower') {
+				stem = stem.toLowerCase()
+			} else if (this.settings.transformName === 'upper') {
+				stem = stem.toUpperCase()
+			}
 		}
 
 		return {
 			stem,
-			newName: stem + '.' + ext,
+			newName: stem + '.' + file.extension,
 			isMeaningful: stem.replace(meaninglessRegex, '') !== '',
 		}
 	}
@@ -795,15 +797,19 @@ class SettingTab extends PluginSettingTab {
 				))
 
 		new Setting(containerEl)
-			.setName('Use lowercase image names')
-			.setDesc(`If enabled, transform the image name to all lowercase characters.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.useLowercase)
+			.setName('Transform pasted name')
+			.setDesc('Change the new name to uppercase or lowercase.')
+			.addDropdown(dd => dd
+				.addOptions({
+					"": "None",
+					"lower": "Lowercase",
+					"upper": "Uppercase",
+				})
+				.setValue(this.plugin.settings.transformName)
 				.onChange(async (value) => {
-					this.plugin.settings.useLowercase = value
+					this.plugin.settings.transformName = value
 					await this.plugin.saveSettings()
-				}
-				))
+				}))
 
 		new Setting(containerEl)
 			.setName('Delete pasted image if cancelled')
