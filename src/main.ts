@@ -1,5 +1,6 @@
 import {
   App,
+  ButtonComponent,
   EditorPosition,
   HeadingCache,
   MarkdownView,
@@ -9,11 +10,12 @@ import {
   PluginSettingTab,
   Setting,
   TAbstractFile,
+  TextComponent,
   TFile,
-} from 'obsidian';
+} from "obsidian"
 
-import { ImageBatchRenameModal } from './batch';
-import { renderTemplate } from './template';
+import { ImageBatchRenameModal } from "./batch"
+import { renderTemplate } from "./template"
 import {
   createElementTree,
   DEBUG,
@@ -23,680 +25,707 @@ import {
   NameObj,
   path,
   sanitizer,
-} from './utils';
+} from "./utils"
 
 interface PluginSettings {
-	imageNamePattern: string
-	selectOnOpen: boolean
-	dupNumberAtStart: boolean
-	dupNumberDelimiter: string
-	dupNumberAlways: boolean
-	spaceReplacement: string
-	transformName: string
-	deleteOnCancel: boolean
-	prefixMap: string
-	autoRename: boolean
-	handleAllAttachments: boolean
-	ignoreActiveDocPattern: string
-	ignorePathPattern: string
-	ignoreExtensionPattern: string
-	disableRenameNotice: boolean
+  imageNamePattern: string
+  selectOnOpen: boolean
+  dupNumberAtStart: boolean
+  dupNumberDelimiter: string
+  dupNumberAlways: boolean
+  spaceReplacement: string
+  transformName: string
+  deleteOnCancel: boolean
+  prefixMap: string
+  autoRename: boolean
+  handleAllAttachments: boolean
+  ignoreActiveDocPattern: string
+  ignorePathPattern: string
+  ignoreExtensionPattern: string
+  disableRenameNotice: boolean
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
-	imageNamePattern: '{{fileName}}',
-	selectOnOpen: false,
-	dupNumberAtStart: false,
-	dupNumberDelimiter: '-',
-	dupNumberAlways: false,
-	spaceReplacement: '',
-	transformName: '',
-	deleteOnCancel: false,
-	prefixMap: '',
-	autoRename: false,
-	handleAllAttachments: false,
-	ignoreActiveDocPattern: '',
-	ignorePathPattern: '',
-	ignoreExtensionPattern: '',
-	disableRenameNotice: false,
+  imageNamePattern: "{{fileName}}",
+  selectOnOpen: false,
+  dupNumberAtStart: false,
+  dupNumberDelimiter: "-",
+  dupNumberAlways: false,
+  spaceReplacement: "",
+  transformName: "",
+  deleteOnCancel: false,
+  prefixMap: "",
+  autoRename: false,
+  handleAllAttachments: false,
+  ignoreActiveDocPattern: "",
+  ignorePathPattern: "",
+  ignoreExtensionPattern: "",
+  disableRenameNotice: false,
 }
 
-const PASTED_IMAGE_PREFIX = 'Pasted image '
-
+const PASTED_IMAGE_PREFIX = "Pasted image "
 
 export default class PasteImageRenamePlugin extends Plugin {
-	settings: PluginSettings
-	modals: Modal[] = []
-	excludeExtensionRegex: RegExp
+  settings: PluginSettings
+  modals: Modal[] = []
+  excludeExtensionRegex: RegExp
 
-	async onload() {
-		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const pkg = require('../package.json')
-		console.log(`Plugin loading: ${pkg.name} ${pkg.version} BUILD_ENV=${process.env.BUILD_ENV}`)
-		await this.loadSettings();
+  async onload() {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require("../package.json")
+    console.log(`Plugin loading: ${pkg.name} ${pkg.version} BUILD_ENV=${process.env.BUILD_ENV}`)
+    await this.loadSettings()
 
-		this.registerEvent(
-			this.app.vault.on('create', (file) => {
-				// debugLog('file created', file)
-				if (!(file instanceof TFile))
-					return
-				const timeGapMs = (new Date().getTime()) - file.stat.ctime
-				// if the file is created more than 1 second ago, the event is most likely be fired on vault initialization when starting Obsidian app, ignore it
-				if (timeGapMs > 1000)
-					return
-				// always ignore markdown file creation
-				if (isMarkdownFile(file)) {
-					return
-				}
-				// check ignore patterns for any path, not only when "handle all" is enabled
-				if (this.shouldIgnore(file)) {
-					debugLog('excluded file by pattern', file)
-					return
-				}
-				if (isPastedImage(file)) {
-					debugLog('pasted image created', file)
-					this.startRenameProcess(file, this.settings.autoRename)
-				} else if (this.settings.handleAllAttachments) {
-					debugLog('handleAllAttachments for file', file)
-					this.startRenameProcess(file, this.settings.autoRename)
-				}
-			})
-		)
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (!(file instanceof TFile)) {
+          return
+        }
 
-		const startBatchRenameProcess = () => {
-			this.openBatchRenameModal()
-		}
-		this.addCommand({
-			id: 'batch-rename-embeded-files',
-			name: 'Batch rename embeded files (in the current file)',
-			callback: startBatchRenameProcess,
-		})
-		if (DEBUG) {
-			this.addRibbonIcon('wand-glyph', 'Batch rename embeded files', startBatchRenameProcess)
-		}
+        const timeGapMs = new Date().getTime() - file.stat.ctime
+        // if the file is created more than 1 second ago, the event is most likely be fired on vault initialization when starting Obsidian app, ignore it
+        if (timeGapMs > 1000) {
+          return
+        }
+        // always ignore markdown file creation
+        if (isMarkdownFile(file)) {
+          return
+        }
+        // check ignore patterns for any path, not only when "handle all" is enabled
+        if (this.shouldIgnore(file)) {
+          debugLog("excluded file by pattern", file)
+          return
+        }
+        if (isPastedImage(file)) {
+          debugLog("pasted image created", file)
+          this.startRenameProcess(file, this.settings.autoRename)
+        } else if (this.settings.handleAllAttachments) {
+          debugLog("handleAllAttachments for file", file)
+          this.startRenameProcess(file, this.settings.autoRename)
+        }
+      })
+    )
 
-		const batchRenameAllImages = () => {
-			this.batchRenameAllImages()
-		}
-		this.addCommand({
-			id: 'batch-rename-all-images',
-			name: 'Batch rename all images instantly (in the current file)',
-			callback: batchRenameAllImages,
-		})
-		if (DEBUG) {
-			this.addRibbonIcon('wand-glyph', 'Batch rename all images instantly (in the current file)', batchRenameAllImages)
-		}
+    const startBatchRenameProcess = () => {
+      this.openBatchRenameModal()
+    }
+    this.addCommand({
+      id: "batch-rename-embeded-files",
+      name: "Batch rename embeded files (in the current file)",
+      callback: startBatchRenameProcess,
+    })
+    if (DEBUG) {
+      this.addRibbonIcon("wand-glyph", "Batch rename embeded files", startBatchRenameProcess)
+    }
 
-		// add settings tab
-		this.addSettingTab(new SettingTab(this.app, this));
+    const batchRenameAllImages = () => {
+      this.batchRenameAllImages()
+    }
+    this.addCommand({
+      id: "batch-rename-all-images",
+      name: "Batch rename all images instantly (in the current file)",
+      callback: batchRenameAllImages,
+    })
+    if (DEBUG) {
+      this.addRibbonIcon("wand-glyph", "Batch rename all images instantly (in the current file)", batchRenameAllImages)
+    }
 
-	}
+    // add settings tab
+    this.addSettingTab(new SettingTab(this.app, this))
+  }
 
-	async startRenameProcess(file: TFile, autoRename = false) {
-		// get active file first
-		const activeFile = this.getActiveFile()
-		if (!activeFile) {
-			new Notice('Error: No active file found.')
-			return
-		}
+  async startRenameProcess(file: TFile, autoRename = false) {
+    // get active file first
+    const activeFile = this.getActiveFile()
+    if (!activeFile) {
+      new Notice("Error: No active file found.")
+      return
+    }
 
-		const { stem, newName, isMeaningful }= this.generateNewName(file, activeFile)
-		debugLog('generated newName:', newName, isMeaningful)
+    const { stem, newName, isMeaningful } = this.generateNewName(file, activeFile)
+    debugLog("generated newName:", newName, isMeaningful)
 
-		if (!isMeaningful || !autoRename) {
-			this.openRenameModal(file, isMeaningful ? stem : '', activeFile.path)
-			return
-		}
-		this.renameFile(file, newName, activeFile.path, true)
-	}
+    if (!isMeaningful || !autoRename) {
+      this.openRenameModal(file, isMeaningful ? stem : "", activeFile.path)
+      return
+    }
+    this.renameFile(file, newName, activeFile.path, true)
+  }
 
-	async renameFile(file: TFile, inputNewName: string, sourcePath: string, replaceCurrentLine?: boolean) {
-		// deduplicate name
-		const { name:newName } = await this.deduplicateNewName(inputNewName, file)
-		debugLog('deduplicated newName:', newName)
-		const originName = file.name
+  async renameFile(file: TFile, inputNewName: string, sourcePath: string, replaceCurrentLine?: boolean) {
+    // deduplicate name
+    const { name: newName } = await this.deduplicateNewName(inputNewName, file)
+    debugLog("deduplicated newName:", newName)
+    const originName = file.name
 
-		// generate linkText using Obsidian API, linkText is either  ![](filename.png) or ![[filename.png]] according to the "Use [[Wikilinks]]" setting.
-		const linkText = this.app.fileManager.generateMarkdownLink(file, sourcePath)
+    // generate linkText using Obsidian API, linkText is either  ![](filename.png) or ![[filename.png]] according to the "Use [[Wikilinks]]" setting.
+    const linkText = this.app.fileManager.generateMarkdownLink(file, sourcePath)
 
-		// file system operation: rename the file
-		const newPath = path.join(file.parent.path, newName)
-		try {
-			await this.app.fileManager.renameFile(file, newPath)
-		} catch (err) {
-			new Notice(`Failed to rename ${newName}: ${err}`)
-			throw err
-		}
+    // file system operation: rename the file
+    const newPath = path.join(file.parent.path, newName)
+    try {
+      await this.app.fileManager.renameFile(file, newPath)
+    } catch (err) {
+      new Notice(`Failed to rename ${newName}: ${err}`)
+      throw err
+    }
 
-		if (!replaceCurrentLine) {
-			return
-		}
+    if (!replaceCurrentLine) {
+      return
+    }
 
-		// in case fileManager.renameFile may not update the internal link in the active file,
-		// we manually replace the current line by manipulating the editor
+    // in case fileManager.renameFile may not update the internal link in the active file,
+    // we manually replace the current line by manipulating the editor
 
-		const newLinkText = this.app.fileManager.generateMarkdownLink(file, sourcePath)
-		debugLog('replace text', linkText, newLinkText)
+    const newLinkText = this.app.fileManager.generateMarkdownLink(file, sourcePath)
+    debugLog("replace text", linkText, newLinkText)
 
-		const editor = this.getActiveEditor()
-		if (!editor) {
-			new Notice(`Failed to rename ${newName}: no active editor`)
-			return
-		}
+    const editor = this.getActiveEditor()
+    if (!editor) {
+      new Notice(`Failed to rename ${newName}: no active editor`)
+      return
+    }
 
-		const cursor = editor.getCursor()
-		const line = editor.getLine(cursor.line)
-		const replacedLine = line.replace(linkText, newLinkText)
-		debugLog('current line -> replaced line', line, replacedLine)
-		// console.log('editor context', cursor, )
-		editor.transaction({
-			changes: [
-				{
-					from: {...cursor, ch: 0},
-					to: {...cursor, ch: line.length},
-					text: replacedLine,
-				}
-			]
-		})
+    const cursor = editor.getCursor()
+    const line = editor.getLine(cursor.line)
+    const replacedLine = line.replace(linkText, newLinkText)
+    debugLog("current line -> replaced line", line, replacedLine)
+    // console.log('editor context', cursor, )
+    editor.transaction({
+      changes: [
+        {
+          from: { ...cursor, ch: 0 },
+          to: { ...cursor, ch: line.length },
+          text: replacedLine,
+        },
+      ],
+    })
 
-		if (!this.settings.disableRenameNotice) {
-			new Notice(`Renamed ${originName} to ${newName}`)
-		}
-	}
+    if (!this.settings.disableRenameNotice) {
+      new Notice(`Renamed ${originName} to ${newName}`)
+    }
+  }
 
-	openRenameModal(file: TFile, newName: string, sourcePath: string) {
-		const modal = new ImageRenameModal(
-			this.app, file as TFile, newName,this.settings.selectOnOpen, this.settings.deleteOnCancel, sourcePath,
-			(confirmedName: string) => {
-				debugLog('confirmedName:', confirmedName)
-				this.renameFile(file, confirmedName, sourcePath, true)
-			},
-			() => {
-				this.modals.splice(this.modals.indexOf(modal), 1)
-			}
-		)
-		this.modals.push(modal)
-		modal.open()
-		debugLog('modals count', this.modals.length)
-	}
+  openRenameModal(file: TFile, newName: string, sourcePath: string) {
+    const modal = new ImageRenameModal(
+      this.app,
+      file as TFile,
+      newName,
+      this.settings.selectOnOpen,
+      this.settings.deleteOnCancel,
+      sourcePath,
+      (confirmedName: string) => {
+        debugLog("confirmedName:", confirmedName)
+        this.renameFile(file, confirmedName, sourcePath, true)
+      },
+      () => {
+        this.modals.splice(this.modals.indexOf(modal), 1)
+      }
+    )
+    this.modals.push(modal)
+    modal.open()
+    debugLog("modals count", this.modals.length)
+  }
 
-	openBatchRenameModal() {
-		const activeFile = this.getActiveFile()
-		const modal = new ImageBatchRenameModal(
-			this.app,
-			activeFile,
-			async (file: TFile, name: string) => {
-				await this.renameFile(file, name, activeFile.path)
-			},
-			() => {
-				this.modals.splice(this.modals.indexOf(modal), 1)
-			}
-		)
-		this.modals.push(modal)
-		modal.open()
-	}
+  openBatchRenameModal() {
+    const activeFile = this.getActiveFile()
+    const modal = new ImageBatchRenameModal(
+      this.app,
+      activeFile,
+      async (file: TFile, name: string) => {
+        await this.renameFile(file, name, activeFile.path)
+      },
+      () => {
+        this.modals.splice(this.modals.indexOf(modal), 1)
+      }
+    )
+    this.modals.push(modal)
+    modal.open()
+  }
 
-	async batchRenameAllImages() {
-		const activeFile = this.getActiveFile()
-		const fileCache = this.app.metadataCache.getFileCache(activeFile)
-		if (!fileCache || !fileCache.embeds) return
-		const extPatternRegex = /jpe?g|png|gif|tiff|webp/i
+  async batchRenameAllImages() {
+    const activeFile = this.getActiveFile()
+    const fileCache = this.app.metadataCache.getFileCache(activeFile)
+    if (!fileCache || !fileCache.embeds) {
+      return
+    }
+    const extPatternRegex = /jpe?g|png|gif|tiff|webp/i
 
-		for (const embed of fileCache.embeds) {
-			const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, activeFile.path)
-			if (!file) {
-				console.warn('file not found', embed.link)
-				return
-			}
-			// match ext
-			const m0 = extPatternRegex.exec(file.extension)
-			if (!m0) return
+    for (const embed of fileCache.embeds) {
+      const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, activeFile.path)
+      if (!file) {
+        console.warn("file not found", embed.link)
+        return
+      }
+      // match ext
+      const m0 = extPatternRegex.exec(file.extension)
+      if (!m0) {
+        return
+      }
 
-			// rename
-			const { newName, isMeaningful }= this.generateNewName(file, activeFile)
-			debugLog('generated newName:', newName, isMeaningful)
-			if (!isMeaningful) {
-				new Notice('Failed to batch rename images: the generated name is not meaningful')
-				break;
-			}
+      // rename
+      const { newName, isMeaningful } = this.generateNewName(file, activeFile)
+      debugLog("generated newName:", newName, isMeaningful)
+      if (!isMeaningful) {
+        new Notice("Failed to batch rename images: the generated name is not meaningful")
+        break
+      }
 
-			await this.renameFile(file, newName, activeFile.path, false)
-		}
-	}
+      await this.renameFile(file, newName, activeFile.path, false)
+    }
+  }
 
-	// returns a new name for the input file, with extension
-	generateNewName(file: TFile, activeFile: TFile) {
-		let imageNameKey = ''
-		let headerName = ''
-		let frontmatter
+  // returns a new name for the input file, with extension
+  generateNewName(file: TFile, activeFile: TFile) {
+    let imageNameKey = ""
+    let headerName = ""
+    let frontmatter
 
-		const fileCache = this.app.metadataCache.getFileCache(activeFile)
-		if (fileCache) {
-			debugLog('frontmatter', fileCache.frontmatter)
-			frontmatter = fileCache.frontmatter
-			imageNameKey = frontmatter?.imageNameKey || ''
+    const fileCache = this.app.metadataCache.getFileCache(activeFile)
+    if (fileCache) {
+      debugLog("frontmatter", fileCache.frontmatter)
+      frontmatter = fileCache.frontmatter
+      imageNameKey = frontmatter?.imageNameKey || ""
 
-			// only run expensive search if using it in template
-			if (this.settings.imageNamePattern.contains("{{headerName}}")) {
-				const cursor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getCursor()
-				headerName = getNearestHeading(fileCache.headings, cursor)
-			}
-		} else {
-			console.warn('could not get file cache from active file', activeFile.name)
-		}
+      // only run expensive search if using it in template
+      if (this.settings.imageNamePattern.contains("{{headerName}}")) {
+        const cursor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getCursor()
+        headerName = getNearestHeading(fileCache.headings, cursor)
+      }
+    } else {
+      console.warn("could not get file cache from active file", activeFile.name)
+    }
 
-		let stem = renderTemplate(
-			this.settings.imageNamePattern,
-			{
-				imageNameKey,
-				fileName: activeFile.basename,
-				dirName: activeFile.parent.name,
-				headerName,
-			},
-			frontmatter)
-		const meaninglessRegex = new RegExp(`[${this.settings.dupNumberDelimiter}\\s]`, 'gm')
+    let stem = renderTemplate(
+      this.settings.imageNamePattern,
+      {
+        imageNameKey,
+        fileName: activeFile.basename,
+        dirName: activeFile.parent.name,
+        headerName,
+      },
+      frontmatter
+    )
+    const meaninglessRegex = new RegExp(`[${this.settings.dupNumberDelimiter}\\s]`, "gm")
 
-		if (this.settings.spaceReplacement) {
-			stem = stem.replace(' ', this.settings.spaceReplacement)
-		}
+    if (this.settings.spaceReplacement) {
+      stem = stem.replace(" ", this.settings.spaceReplacement)
+    }
 
-		if (this.settings.prefixMap) {
-			const lines = this.settings.prefixMap.split("\n")
-			for (const line of lines) {
-				if (!line.trim()) {
-					continue
-				}
+    if (this.settings.prefixMap) {
+      const lines = this.settings.prefixMap.split("\n")
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue
+        }
 
-				const split = line.split("=", 2)
-				if (split.length !== 2) {
-					new Notice(`Error: prefix map line '${line}' is missing '='. Please fix your plugin settings.`)
-					break
-				}
-				const k = split[0]
-				const v = split[1]
+        const split = line.split("=", 2)
+        if (split.length !== 2) {
+          new Notice(`Error: prefix map line '${line}' is missing '='. Please fix your plugin settings.`)
+          break
+        }
+        const k = split[0]
+        const v = split[1]
 
-				if (activeFile.path.startsWith(k)) {
-					stem = `${v}${this.settings.dupNumberDelimiter}${stem}`
-					break
-				}
-			}
-		}
+        if (activeFile.path.startsWith(k)) {
+          stem = `${v}${this.settings.dupNumberDelimiter}${stem}`
+          break
+        }
+      }
+    }
 
-		if (this.settings.transformName) {
-			if (this.settings.transformName === 'lower') {
-				stem = stem.toLowerCase()
-			} else if (this.settings.transformName === 'upper') {
-				stem = stem.toUpperCase()
-			}
-		}
+    if (this.settings.transformName) {
+      if (this.settings.transformName === "lower") {
+        stem = stem.toLowerCase()
+      } else if (this.settings.transformName === "upper") {
+        stem = stem.toUpperCase()
+      }
+    }
 
-		return {
-			stem,
-			newName: stem + '.' + file.extension,
-			isMeaningful: stem.replace(meaninglessRegex, '') !== '',
-		}
-	}
+    return {
+      stem,
+      newName: stem + "." + file.extension,
+      isMeaningful: stem.replace(meaninglessRegex, "") !== "",
+    }
+  }
 
-	// newName: foo.ext
-	async deduplicateNewName(newName: string, file: TFile): Promise<NameObj> {
-		// list files in dir
-		const dir = file.parent.path
-		const listed = await this.app.vault.adapter.list(dir)
-		debugLog('sibling files', listed)
+  // newName: foo.ext
+  async deduplicateNewName(newName: string, file: TFile): Promise<NameObj> {
+    // list files in dir
+    const dir = file.parent.path
+    const listed = await this.app.vault.adapter.list(dir)
+    debugLog("sibling files", listed)
 
-		// parse newName
-		const newNameExt = path.extension(newName)
-		const newNameStem = newName.slice(0, newName.length - newNameExt.length - 1)
-		const newNameStemEscaped = escapeRegExp(newNameStem)
-		const delimiter = this.settings.dupNumberDelimiter
-		const delimiterEscaped = escapeRegExp(delimiter)
+    // parse newName
+    const newNameExt = path.extension(newName)
+    const newNameStem = newName.slice(0, newName.length - newNameExt.length - 1)
+    const newNameStemEscaped = escapeRegExp(newNameStem)
+    const delimiter = this.settings.dupNumberDelimiter
+    const delimiterEscaped = escapeRegExp(delimiter)
 
-		let dupNameRegex
-		if (this.settings.dupNumberAtStart) {
-			dupNameRegex = new RegExp(
-				`^(?<number>\\d+)${delimiterEscaped}(?<name>${newNameStemEscaped})\\.${newNameExt}$`)
-		} else {
-			dupNameRegex = new RegExp(
-				`^(?<name>${newNameStemEscaped})${delimiterEscaped}(?<number>\\d+)\\.${newNameExt}$`)
-		}
-		debugLog('dupNameRegex', dupNameRegex)
+    let dupNameRegex
+    if (this.settings.dupNumberAtStart) {
+      dupNameRegex = new RegExp(`^(?<number>\\d+)${delimiterEscaped}(?<name>${newNameStemEscaped})\\.${newNameExt}$`)
+    } else {
+      dupNameRegex = new RegExp(`^(?<name>${newNameStemEscaped})${delimiterEscaped}(?<number>\\d+)\\.${newNameExt}$`)
+    }
+    debugLog("dupNameRegex", dupNameRegex)
 
-		const dupNameNumbers: number[] = []
-		let isNewNameExist = false
-		for (let sibling of listed.files) {
-			sibling = path.basename(sibling)
-			if (sibling == newName) {
-				isNewNameExist = true
-				continue
-			}
+    const dupNameNumbers: number[] = []
+    let isNewNameExist = false
+    for (let sibling of listed.files) {
+      sibling = path.basename(sibling)
+      if (sibling == newName) {
+        isNewNameExist = true
+        continue
+      }
 
-			// match dupNames
-			const m = dupNameRegex.exec(sibling)
-			if (!m) continue
-			// parse int for m.groups.number
-			dupNameNumbers.push(parseInt(m.groups.number))
-		}
+      // match dupNames
+      const m = dupNameRegex.exec(sibling)
+      if (!m) {
+        continue
+      }
+      // parse int for m.groups.number
+      dupNameNumbers.push(parseInt(m.groups.number))
+    }
 
-		if (isNewNameExist || this.settings.dupNumberAlways) {
-			// get max number
-			const newNumber = dupNameNumbers.length > 0 ? Math.max(...dupNameNumbers) + 1 : 1
-			// change newName
-			if (this.settings.dupNumberAtStart) {
-				newName = `${newNumber}${delimiter}${newNameStem}.${newNameExt}`
-			} else {
-				newName = `${newNameStem}${delimiter}${newNumber}.${newNameExt}`
-			}
-		}
+    if (isNewNameExist || this.settings.dupNumberAlways) {
+      // get max number
+      const newNumber = dupNameNumbers.length > 0 ? Math.max(...dupNameNumbers) + 1 : 1
+      // change newName
+      if (this.settings.dupNumberAtStart) {
+        newName = `${newNumber}${delimiter}${newNameStem}.${newNameExt}`
+      } else {
+        newName = `${newNameStem}${delimiter}${newNumber}.${newNameExt}`
+      }
+    }
 
-		return {
-			name: newName,
-			stem: newName.slice(0, newName.length - newNameExt.length - 1),
-			extension: newNameExt,
-		}
-	}
+    return {
+      name: newName,
+      stem: newName.slice(0, newName.length - newNameExt.length - 1),
+      extension: newNameExt,
+    }
+  }
 
-	getActiveFile() {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView)
-		const file = view?.file
-		debugLog('active file', file?.path)
-		return file
-	}
-	getActiveEditor() {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView)
-		return view?.editor
-	}
+  getActiveFile() {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView)
+    const file = view?.file
+    debugLog("active file", file?.path)
+    return file
+  }
+  getActiveEditor() {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView)
+    return view?.editor
+  }
 
-	onunload() {
-		this.modals.map(modal => modal.close())
-	}
+  onunload() {
+    this.modals.map((modal) => modal.close())
+  }
 
-	shouldIgnore(file: TFile): boolean {
-		let result = false
-		const activeFile = this.getActiveFile()?.path ?? ''
+  shouldIgnore(file: TFile): boolean {
+    let result = false
+    const activeFile = this.getActiveFile()?.path ?? ""
 
-		const extPat = this.settings.ignoreExtensionPattern.replace('\n', '').trim()
-		if (extPat && file.extension) {
-			result = result || new RegExp(extPat).test(file.extension)
-		}
-		const docPat = this.settings.ignoreActiveDocPattern.replace('\n', '').trim()
-		if (docPat && activeFile) {
-			result = result || new RegExp(docPat).test(activeFile)
-		}
-		const pathPat = this.settings.ignorePathPattern.replace('\n', '').trim()
-		if (pathPat && file.path) {
-			result = result || new RegExp(docPat).test(file.path)
-		}
+    const extPat = this.settings.ignoreExtensionPattern.replace("\n", "").trim()
+    if (extPat && file.extension) {
+      result = result || new RegExp(extPat).test(file.extension)
+    }
+    const docPat = this.settings.ignoreActiveDocPattern.replace("\n", "").trim()
+    if (docPat && activeFile) {
+      result = result || new RegExp(docPat).test(activeFile)
+    }
+    const pathPat = this.settings.ignorePathPattern.replace("\n", "").trim()
+    if (pathPat && file.path) {
+      result = result || new RegExp(docPat).test(file.path)
+    }
 
-		return result
-	}
+    return result
+  }
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData())
+  }
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+  async saveSettings() {
+    await this.saveData(this.settings)
+  }
 }
 
 function getNearestHeading(headings?: HeadingCache[], cursor?: EditorPosition): string {
-	if (!headings || headings.length <= 0) {
-		return ''
-	}
-	if (!cursor) {
-		return ''
-	}
+  if (!headings || headings.length <= 0) {
+    return ""
+  }
+  if (!cursor) {
+    return ""
+  }
 
-	let h = ''
-	let dist = -1
+  let h = ""
+  let dist = -1
 
-	// unfortunately we have to iterate through all headings because the cache
-	// is not guaranteed to be sorted by position
-	for (const heading of headings) {
-		const d = cursor.line - heading.position.start.line
-		if (d < 0) {
-			continue
-		}
-		if (d < dist || dist < 0) {
-			h = heading.heading
-			dist = d
-		}
-	}
+  // unfortunately we have to iterate through all headings because the cache
+  // is not guaranteed to be sorted by position
+  for (const heading of headings) {
+    const d = cursor.line - heading.position.start.line
+    if (d < 0) {
+      continue
+    }
+    if (d < dist || dist < 0) {
+      h = heading.heading
+      dist = d
+    }
+  }
 
-	return h
+  return h
 }
 
 // these are the exts that can most likely be display in the rename dialog
 const IMAGE_EXTENSIONS = [
-	"jpg", "jpeg", "jfif", "pjpeg", "pjp", "png", "gif", "webp", "png", "bmp",
-	"ico", "cur", "avif", "heif", "heic"
+  "jpg",
+  "jpeg",
+  "jfif",
+  "pjpeg",
+  "pjp",
+  "png",
+  "gif",
+  "webp",
+  "png",
+  "bmp",
+  "ico",
+  "cur",
+  "avif",
+  "heif",
+  "heic",
 ]
 
 function isPastedImage(file: TAbstractFile): boolean {
-	if (file instanceof TFile) {
-		return (file.name.startsWith(PASTED_IMAGE_PREFIX) ||
-			IMAGE_EXTENSIONS.contains(file.extension.toLowerCase()))
-	}
-	return false
+  if (file instanceof TFile) {
+    return file.name.startsWith(PASTED_IMAGE_PREFIX) || IMAGE_EXTENSIONS.contains(file.extension.toLowerCase())
+  }
+  return false
 }
 
 function isMarkdownFile(file: TAbstractFile): boolean {
-	if (file instanceof TFile) {
-		if (file.extension === 'md') {
-			return true
-		}
-	}
-	return false
+  if (file instanceof TFile) {
+    if (file.extension === "md") {
+      return true
+    }
+  }
+  return false
 }
 
 class ImageRenameModal extends Modal {
-	src: TFile
-	sourcePath: string
-	stem: string
-	renameFunc: (path: string) => void
-	onCloseExtra: () => void
-	selectOnOpen: boolean
-	deleteOnCancel: boolean
-	acceptRename: boolean
+  src: TFile
+  sourcePath: string
+  stem: string
+  renameFunc: (path: string) => void
+  onCloseExtra: () => void
+  selectOnOpen: boolean
+  deleteOnCancel: boolean
+  acceptRename: boolean
 
-	constructor(app: App, src: TFile, stem: string, selectOnOpen: boolean, deleteOnCancel: boolean, sourcePath: string, renameFunc: (path: string) => void, onClose: () => void) {
-		super(app);
-		this.src = src
-		this.sourcePath = sourcePath
-		this.stem = stem
-		this.renameFunc = renameFunc
-		this.onCloseExtra = onClose
-		this.selectOnOpen = selectOnOpen
-		this.deleteOnCancel = deleteOnCancel
-		this.acceptRename = false
-	}
+  constructor(
+    app: App,
+    src: TFile,
+    stem: string,
+    selectOnOpen: boolean,
+    deleteOnCancel: boolean,
+    sourcePath: string,
+    renameFunc: (path: string) => void,
+    onClose: () => void
+  ) {
+    super(app)
+    this.src = src
+    this.sourcePath = sourcePath
+    this.stem = stem
+    this.renameFunc = renameFunc
+    this.onCloseExtra = onClose
+    this.selectOnOpen = selectOnOpen
+    this.deleteOnCancel = deleteOnCancel
+    this.acceptRename = false
+  }
 
-	onOpen() {
-		this.containerEl.addClass('image-rename-modal')
-		const { contentEl, titleEl } = this;
-		titleEl.setText('Rename image')
+  onOpen() {
+    this.containerEl.addClass("image-rename-modal")
+    const { contentEl, titleEl } = this
+    titleEl.setText("Rename image")
 
-		const imageContainer = contentEl.createDiv({
-			cls: 'image-container',
-		})
-		imageContainer.createEl('img', {
-			attr: {
-				src: this.app.vault.getResourcePath(this.src),
-			}
-		})
+    const imageContainer = contentEl.createDiv({
+      cls: "image-container",
+    })
+    imageContainer.createEl("img", {
+      attr: {
+        src: this.app.vault.getResourcePath(this.src),
+      },
+    })
 
-		let stem = this.stem
-		const ext = this.src.extension
-		const getNewName = (stem: string) => stem + '.' + ext
-		const getNewPath = (stem: string) => path.join(this.src.parent.path, getNewName(stem))
+    let stem = this.stem
+    const ext = this.src.extension
+    const getNewName = (stem: string) => stem + "." + ext
+    const getNewPath = (stem: string) => path.join(this.src.parent.path, getNewName(stem))
 
-		const startValue = stem
-		const infoET = createElementTree(contentEl, {
-			tag: 'ul',
-			cls: 'info',
-			children: [
-				{
-					tag: 'li',
-					children: [
-						{
-							tag: 'span',
-							text: 'Origin path',
-						},
-						{
-							tag: 'span',
-							text: this.src.path,
-						}
-					],
-				},
-				{
-					tag: 'li',
-					children: [
-						{
-							tag: 'span',
-							text: 'New path',
-						},
-						{
-							tag: 'span',
-							text: getNewPath(stem),
-						}
-					],
-				}
-			]
-		})
+    const startValue = stem
+    const infoET = createElementTree(contentEl, {
+      tag: "ul",
+      cls: "info",
+      children: [
+        {
+          tag: "li",
+          children: [
+            {
+              tag: "span",
+              text: "Origin path",
+            },
+            {
+              tag: "span",
+              text: this.src.path,
+            },
+          ],
+        },
+        {
+          tag: "li",
+          children: [
+            {
+              tag: "span",
+              text: "New path",
+            },
+            {
+              tag: "span",
+              text: getNewPath(stem),
+            },
+          ],
+        },
+      ],
+    })
 
-		const doRename = async () => {
-			debugLog('doRename', `stem=${stem}`)
-			this.acceptRename = true
-			// don't actually rename if the user wants the original name
-			if (stem === this.src.basename) {
-				return
-			}
-			this.renameFunc(getNewName(stem))
-		}
+    const doRename = async () => {
+      debugLog("doRename", `stem=${stem}`)
+      this.acceptRename = true
+      // don't actually rename if the user wants the original name
+      if (stem === this.src.basename) {
+        return
+      }
+      this.renameFunc(getNewName(stem))
+    }
 
-		let textEl: any = null
-		let rnBtn: any = null
+    let textEl: TextComponent | undefined
+    let rnBtn: ButtonComponent | undefined
 
-		const updateValue = (value: string) => {
-			stem = sanitizer.filename(value)
-			infoET.children[1].children[1].el.innerText = getNewPath(stem)
+    const updateValue = (value: string) => {
+      stem = sanitizer.filename(value)
+      infoET.children[1].children[1].el.innerText = getNewPath(stem)
 
-			if (!textEl || !rnBtn) {
-				return
-			}
-			if (!stem) {
-				textEl.inputEl.addClass("invalid-textbox");
-				rnBtn.buttonEl.disabled = true;
-			} else {
-				textEl.inputEl.removeClass("invalid-textbox");
-				rnBtn.buttonEl.disabled = false;
-			}
-		}
+      if (!textEl || !rnBtn) {
+        return
+      }
+      if (!stem) {
+        textEl.inputEl.addClass("invalid-textbox")
+        rnBtn.buttonEl.disabled = true
+      } else {
+        textEl.inputEl.removeClass("invalid-textbox")
+        rnBtn.buttonEl.disabled = false
+      }
+    }
 
-		const nameSetting = new Setting(contentEl)
-			.setName('New name')
-			.setDesc('Please input the new name for the image (without extension)')
-			.addText(text => { text
-				.setValue(stem)
-				.onChange(async (value) => {
-					updateValue(value)
-				})
-				textEl = text
-			})
-			.addButton(button =>
-				button.setButtonText("Use original name")
-				.onClick(async () => {
-					if (textEl) {
-						textEl.setValue(this.src.basename)
-						updateValue(this.src.basename)
-					}
-				}))
+    const nameSetting = new Setting(contentEl)
+      .setName("New name")
+      .setDesc("Please input the new name for the image (without extension)")
+      .addText((text) => {
+        text.setValue(stem).onChange(async (value) => {
+          updateValue(value)
+        })
+        textEl = text
+      })
+      .addButton((button) =>
+        button.setButtonText("Use original name").onClick(async () => {
+          if (textEl) {
+            textEl.setValue(this.src.basename)
+            updateValue(this.src.basename)
+          }
+        })
+      )
 
-		const nameInputEl = nameSetting.controlEl.children[0] as HTMLInputElement
-		nameInputEl.focus()
-		if (this.selectOnOpen) {
-			nameInputEl.select()
-		}
+    const nameInputEl = nameSetting.controlEl.children[0] as HTMLInputElement
+    nameInputEl.focus()
+    if (this.selectOnOpen) {
+      nameInputEl.select()
+    }
 
-		const accept = () => {
-			if (!stem) {
-				new Notice('Error: New image name cannot not be empty')
-				return
-			}
-			doRename()
-			this.close()
-		}
+    const accept = () => {
+      if (!stem) {
+        new Notice("Error: New image name cannot not be empty")
+        return
+      }
+      doRename()
+      this.close()
+    }
 
-		const nameInputState = lockInputMethodComposition(nameInputEl)
-		nameInputEl.addEventListener('keydown', async (e) => {
-			if (e.key === 'Enter' && !nameInputState.lock) {
-				e.preventDefault()
-				accept()
-			}
-		})
+    const nameInputState = lockInputMethodComposition(nameInputEl)
+    nameInputEl.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter" && !nameInputState.lock) {
+        e.preventDefault()
+        accept()
+      }
+    })
 
-		new Setting(contentEl)
-			.addButton(button => {
-				rnBtn = button
-				button
-					.setButtonText('Rename')
-					.setCta()
-					.onClick(accept)
-			})
-			.addButton(button =>
-				button.setButtonText("Reset")
-				.onClick(async () => {
-					updateValue(startValue)
-					textEl?.setValue(startValue)
-				}))
-			.addButton(button => {
-				button
-					.setButtonText('Cancel')
-					.onClick(() => { this.close() })
-			})
-	}
+    new Setting(contentEl)
+      .addButton((button) => {
+        rnBtn = button
+        button.setButtonText("Rename").setCta().onClick(accept)
+      })
+      .addButton((button) =>
+        button.setButtonText("Reset").onClick(async () => {
+          updateValue(startValue)
+          textEl?.setValue(startValue)
+        })
+      )
+      .addButton((button) => {
+        button.setButtonText("Cancel").onClick(() => {
+          this.close()
+        })
+      })
+  }
 
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
+  onClose() {
+    const { contentEl } = this
+    contentEl.empty()
 
-		// handle file delete logic
-		if (this.deleteOnCancel && !this.acceptRename) {
-			debugLog("deleting source file", this.src.path)
-			const f = this.app.vault.getAbstractFileByPath(this.src.path)
+    // handle file delete logic
+    if (this.deleteOnCancel && !this.acceptRename) {
+      debugLog("deleting source file", this.src.path)
+      const f = this.app.vault.getAbstractFileByPath(this.src.path)
 
-			// basic sanity check to avoid nuking the user's directories if
-			// something breaks in this plugin down the line
-			if (f instanceof TFile) {
-				this.app.vault.delete(f)
-				const linkText = this.app.fileManager.generateMarkdownLink(f, this.sourcePath)
-				const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
-				if (!editor) {
-					new Notice('failed to remove text: could not get active editor')
-					return
-				}
+      // basic sanity check to avoid nuking the user's directories if
+      // something breaks in this plugin down the line
+      if (f instanceof TFile) {
+        this.app.vault.delete(f)
+        const linkText = this.app.fileManager.generateMarkdownLink(f, this.sourcePath)
+        const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
+        if (!editor) {
+          new Notice("failed to remove text: could not get active editor")
+          return
+        }
 
-				const cursor = editor.getCursor()
-				const line = editor.getLine(cursor.line)
-				const replacedLine = line.replace(`!${linkText}`, '')
-				debugLog('current line -> replaced line', line, replacedLine)
-				editor.transaction({
-					changes: [
-						{
-							from: {...cursor, ch: 0},
-							to: {...cursor, ch: line.length},
-							text: replacedLine,
-						}
-					]
-				})
-			} else {
-				debugLog("source path is not a file", this.src.path)
-			}
-		}
-		this.acceptRename = false
+        const cursor = editor.getCursor()
+        const line = editor.getLine(cursor.line)
+        const replacedLine = line.replace(`!${linkText}`, "")
+        debugLog("current line -> replaced line", line, replacedLine)
+        editor.transaction({
+          changes: [
+            {
+              from: { ...cursor, ch: 0 },
+              to: { ...cursor, ch: line.length },
+              text: replacedLine,
+            },
+          ],
+        })
+      } else {
+        debugLog("source path is not a file", this.src.path)
+      }
+    }
+    this.acceptRename = false
 
-		this.onCloseExtra()
-	}
+    this.onCloseExtra()
+  }
 }
 
 const imageNamePatternDesc = `
@@ -716,200 +745,218 @@ Here are some examples from pattern to image names (repeat in sequence), variabl
 `
 
 class SettingTab extends PluginSettingTab {
-	plugin: PasteImageRenamePlugin;
+  plugin: PasteImageRenamePlugin
 
-	constructor(app: App, plugin: PasteImageRenamePlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+  constructor(app: App, plugin: PasteImageRenamePlugin) {
+    super(app, plugin)
+    this.plugin = plugin
+  }
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
+  display(): void {
+    const { containerEl } = this
+    containerEl.empty()
 
-		new Setting(containerEl)
-			.setName('Image name pattern')
-			.setDesc(imageNamePatternDesc)
-			.setClass('long-description-setting-item')
-			.addText(text => text
-				.setPlaceholder('{{imageNameKey}}')
-				.setValue(this.plugin.settings.imageNamePattern)
-				.onChange(async (value) => {
-					this.plugin.settings.imageNamePattern = value;
-					await this.plugin.saveSettings();
-				}
-			));
+    new Setting(containerEl)
+      .setName("Image name pattern")
+      .setDesc(imageNamePatternDesc)
+      .setClass("long-description-setting-item")
+      .addText((text) =>
+        text
+          .setPlaceholder("{{imageNameKey}}")
+          .setValue(this.plugin.settings.imageNamePattern)
+          .onChange(async (value) => {
+            this.plugin.settings.imageNamePattern = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Select text when dialog opens')
-			.setDesc(`If enabled, selects all text when the rename file dialog opens.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.selectOnOpen)
-				.onChange(async (value) => {
-					this.plugin.settings.selectOnOpen = value
-					await this.plugin.saveSettings()
-				}
-				))
+    new Setting(containerEl)
+      .setName("Select text when dialog opens")
+      .setDesc(`If enabled, selects all text when the rename file dialog opens.`)
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.selectOnOpen).onChange(async (value) => {
+          this.plugin.settings.selectOnOpen = value
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Duplicate number at start (or end)')
-			.setDesc(`If enabled, duplicate number will be added at the start as prefix for the image name, otherwise it will be added at the end as suffix for the image name.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.dupNumberAtStart)
-				.onChange(async (value) => {
-					this.plugin.settings.dupNumberAtStart = value
-					await this.plugin.saveSettings()
-				}
-				))
+    new Setting(containerEl)
+      .setName("Duplicate number at start (or end)")
+      .setDesc(
+        "If enabled, duplicate number will be added at the start as prefix for the image name, \
+        otherwise it will be added at the end as suffix for the image name."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.dupNumberAtStart).onChange(async (value) => {
+          this.plugin.settings.dupNumberAtStart = value
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Duplicate number delimiter')
-			.setDesc(`The delimiter to generate the number prefix/suffix for duplicated names. For example, if the value is "-", the suffix will be like "-1", "-2", "-3", and the prefix will be like "1-", "2-", "3-". Only characters that are valid in file names are allowed.`)
-			.addText(text => text
-				.setValue(this.plugin.settings.dupNumberDelimiter)
-				.onChange(async (value) => {
-					this.plugin.settings.dupNumberDelimiter = sanitizer.delimiter(value);
-					await this.plugin.saveSettings();
-				}
-			));
+    new Setting(containerEl)
+      .setName("Duplicate number delimiter")
+      .setDesc(
+        'The delimiter to generate the number prefix/suffix for duplicated names. For example, if the value is "-", the suffix will be like "-1", "-2", "-3", and the prefix will be like "1-", "2-", "3-". Only characters that are valid in file names are allowed.'
+      )
+      .addText((text) =>
+        text.setValue(this.plugin.settings.dupNumberDelimiter).onChange(async (value) => {
+          this.plugin.settings.dupNumberDelimiter = sanitizer.delimiter(value)
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Always add duplicate number')
-			.setDesc(`If enabled, duplicate number will always be added to the image name. Otherwise, it will only be added when the name is duplicated.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.dupNumberAlways)
-				.onChange(async (value) => {
-					this.plugin.settings.dupNumberAlways = value
-					await this.plugin.saveSettings()
-				}
-				))
+    new Setting(containerEl)
+      .setName("Always add duplicate number")
+      .setDesc(
+        `If enabled, duplicate number will always be added to the image name. Otherwise, it will only be added when the name is duplicated.`
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.dupNumberAlways).onChange(async (value) => {
+          this.plugin.settings.dupNumberAlways = value
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Replace spaces')
-			.setDesc(`Replace spaces in the image file name with the given value. Leave empty to disable.`)
-			.addText(toggle => toggle
-				.setValue(this.plugin.settings.spaceReplacement)
-				.setPlaceholder('disabled when empty')
-				.onChange(async (value) => {
-					this.plugin.settings.spaceReplacement = value
-					await this.plugin.saveSettings()
-				}
-				))
+    new Setting(containerEl)
+      .setName("Replace spaces")
+      .setDesc("Replace spaces in the image file name with the given value. Leave empty to disable.")
+      .addText((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.spaceReplacement)
+          .setPlaceholder("disabled when empty")
+          .onChange(async (value) => {
+            this.plugin.settings.spaceReplacement = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Transform pasted name')
-			.setDesc('Change the new name to uppercase or lowercase.')
-			.addDropdown(dd => dd
-				.addOptions({
-					"": "None",
-					"lower": "Lowercase",
-					"upper": "Uppercase",
-				})
-				.setValue(this.plugin.settings.transformName)
-				.onChange(async (value) => {
-					this.plugin.settings.transformName = value
-					await this.plugin.saveSettings()
-				}))
+    new Setting(containerEl)
+      .setName("Transform pasted name")
+      .setDesc("Change the new name to uppercase or lowercase.")
+      .addDropdown((dd) =>
+        dd
+          .addOptions({
+            "": "None",
+            lower: "Lowercase",
+            upper: "Uppercase",
+          })
+          .setValue(this.plugin.settings.transformName)
+          .onChange(async (value) => {
+            this.plugin.settings.transformName = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Delete pasted image if cancelled')
-			.setDesc('If enabled, the pasted image file will be deleted if the rename dialog is cancelled.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.deleteOnCancel)
-				.onChange(async (value) => {
-					this.plugin.settings.deleteOnCancel = value
-					await this.plugin.saveSettings()
-				}
-				))
+    new Setting(containerEl)
+      .setName("Delete pasted image if cancelled")
+      .setDesc("If enabled, the pasted image file will be deleted if the rename dialog is cancelled.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.deleteOnCancel).onChange(async (value) => {
+          this.plugin.settings.deleteOnCancel = value
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Prefix by path')
-			.setDesc(`If the active document path starts with a given prefix, use the value as an additional
-			prefix followed by the duplicate number delimiter. Each line should have the format "prefix=value".
-			Prefix matching is case sensitive.
-			Example: Foo/BAR/baz=fbz will insert "fbz-" before image names pasted into Foo > BAR > baz > (note).`)
-			.addTextArea(toggle => toggle
-				.setValue(this.plugin.settings.prefixMap)
-				.setPlaceholder('Foo/BAR/baz=fbz')
-				.onChange(async (value) => {
-					this.plugin.settings.prefixMap = value
-					await this.plugin.saveSettings()
-				}
-				))
+    new Setting(containerEl)
+      .setName("Prefix by path")
+      .setDesc(
+        'If the active document path starts with a given prefix, use the value as an additional prefix \
+        followed by the duplicate number delimiter. Each line should have the format "prefix=value". \
+        Prefix matching is case sensitive. \
+        Example: Foo/BAR/baz=fbz will insert "fbz-" before image names pasted into Foo > BAR > baz > (note).'
+      )
+      .addTextArea((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.prefixMap)
+          .setPlaceholder("Foo/BAR/baz=fbz")
+          .onChange(async (value) => {
+            this.plugin.settings.prefixMap = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Auto rename')
-			.setDesc(`By default, the rename modal will always be shown to confirm before renaming, if this option is set, the image will be auto renamed after pasting.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.autoRename)
-				.onChange(async (value) => {
-					this.plugin.settings.autoRename = value;
-					await this.plugin.saveSettings();
-				}
-			));
+    new Setting(containerEl)
+      .setName("Auto rename")
+      .setDesc(
+        "By default, the rename modal will always be shown to confirm before renaming, if this option is set, the image will be auto renamed after pasting."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.autoRename).onChange(async (value) => {
+          this.plugin.settings.autoRename = value
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Handle all attachments')
-			.setDesc(`By default, the plugin only handles images that starts with "Pasted image " in name,
-			which is the prefix Obsidian uses to create images from pasted content.
-			If this option is set, the plugin will handle all attachments that are created in the vault.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.handleAllAttachments)
-				.onChange(async (value) => {
-					this.plugin.settings.handleAllAttachments = value;
-					await this.plugin.saveSettings()
-				}
-			))
+    new Setting(containerEl)
+      .setName("Handle all attachments")
+      .setDesc(
+        'By default, the plugin only handles images that starts with "Pasted image " in name, which \
+        is the prefix Obsidian uses to create images from pasted content. If this option is set, the \
+        plugin will handle all attachments that are created in the vault.'
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.handleAllAttachments).onChange(async (value) => {
+          this.plugin.settings.handleAllAttachments = value
+          await this.plugin.saveSettings()
+        })
+      )
 
-		new Setting(containerEl)
-			.setName('Ignore by active document')
-			.setDesc('Regular expression to ignore processing attachments by the active document path. The full path is tested against this pattern, including the file extension.')
-			.setClass('single-line-textarea')
-			.addTextArea(text => text
-				.setPlaceholder('^foo/(bar|baz)')
-				.setValue(this.plugin.settings.ignoreActiveDocPattern)
-				.onChange(async (value) => {
-					this.plugin.settings.ignoreActiveDocPattern = value;
-					await this.plugin.saveSettings()
-				}
-			))
+    new Setting(containerEl)
+      .setName("Ignore by active document")
+      .setDesc(
+        "Regular expression to ignore processing attachments by the active document path. The full path is tested against this pattern, including the file extension."
+      )
+      .setClass("single-line-textarea")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("^foo/(bar|baz)")
+          .setValue(this.plugin.settings.ignoreActiveDocPattern)
+          .onChange(async (value) => {
+            this.plugin.settings.ignoreActiveDocPattern = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Ignore by path')
-			.setDesc('Regular expression to ignore processing attachments by path. The full path is tested against this pattern, including the file extension. This setting is useful to avoid processing files in directories handled by other plugins.')
-			.setClass('single-line-textarea')
-			.addTextArea(text => text
-				.setPlaceholder('my/protected/folder')
-				.setValue(this.plugin.settings.ignorePathPattern)
-				.onChange(async (value) => {
-					this.plugin.settings.ignorePathPattern = value;
-					await this.plugin.saveSettings()
-				}
-			))
+    new Setting(containerEl)
+      .setName("Ignore by path")
+      .setDesc(
+        "Regular expression to ignore processing attachments by path. The full path is tested against this pattern, including the file extension. This setting is useful to avoid processing files in directories handled by other plugins."
+      )
+      .setClass("single-line-textarea")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("my/protected/folder")
+          .setValue(this.plugin.settings.ignorePathPattern)
+          .onChange(async (value) => {
+            this.plugin.settings.ignorePathPattern = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Ignore by extension')
-			.setDesc('Regular expression to ignore processing attachments by extension.')
-			.setClass('single-line-textarea')
-			.addTextArea(text => text
-				.setPlaceholder('docx?|xlsx?|pptx?|zip|rar')
-				.setValue(this.plugin.settings.ignoreExtensionPattern)
-				.onChange(async (value) => {
-					this.plugin.settings.ignoreExtensionPattern = value;
-					await this.plugin.saveSettings()
-				}
-			))
+    new Setting(containerEl)
+      .setName("Ignore by extension")
+      .setDesc("Regular expression to ignore processing attachments by extension.")
+      .setClass("single-line-textarea")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("docx?|xlsx?|pptx?|zip|rar")
+          .setValue(this.plugin.settings.ignoreExtensionPattern)
+          .onChange(async (value) => {
+            this.plugin.settings.ignoreExtensionPattern = value
+            await this.plugin.saveSettings()
+          })
+      )
 
-		new Setting(containerEl)
-			.setName('Disable rename notice')
-			.setDesc(`Turn off this option if you don't want to see the notice when renaming images.
-			Note that Obsidian may display a notice when a link has changed, this option cannot disable that.`)
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.disableRenameNotice)
-				.onChange(async (value) => {
-					this.plugin.settings.disableRenameNotice = value;
-					await this.plugin.saveSettings()
-				}
-			))
-	}
+    new Setting(containerEl)
+      .setName("Disable rename notice")
+      .setDesc(
+        "Turn off this option if you don't want to see the notice when renaming images. Note that Obsidian may display a notice when a link has changed, this option cannot disable that."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.disableRenameNotice).onChange(async (value) => {
+          this.plugin.settings.disableRenameNotice = value
+          await this.plugin.saveSettings()
+        })
+      )
+  }
 }
